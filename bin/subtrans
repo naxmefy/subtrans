@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+
+const fs = require('fs')
+const path = require('path')
+const async = require('async')
+const _ = require('lodash')
+const translate = require('google-translate-api')
+const parser = require('ass-parser')
+const stringify = require('ass-stringify')
+const minimist = require('minimist')
+
+const args = minimist(process.argv.slice(2), {})
+
+if (args._.length < 1) {
+    console.error(`ERROR: Missing ASS File`)
+    process.exit(1)
+}
+
+const currentDir = process.cwd()
+const assFile = path.resolve(currentDir, _.head(args._))
+const targetFile = path.resolve(currentDir, `translatetd_${_.head(args._)}`)
+
+const assFileContent = fs.readFileSync(assFile, 'utf-8')
+const parsedAssFile = parser(assFileContent, {comments: true})
+const eventsOfAssFile = _.find(parsedAssFile, ['section', 'Events'])
+
+const toTranslate = _.tail(eventsOfAssFile.body)
+
+let counter = 0
+async.eachSeries(toTranslate, (tt, next) => {
+    console.log('[%s] started: %s', counter, tt.value.Text);
+    translate(tt.value.Text, {from: 'en', to: 'de'}).then(res => {
+        // console.log(res.text);
+        //=> I speak English
+        // console.log(res.from.language.iso);
+        //=> nl
+        console.log('[%s] finished: %s\n', counter, res.text);
+        counter++;
+        tt.value.Text = `{\pos(960,1040)}${res.text} [${tt.value.Text}]`
+        return next();
+    }).catch(err => {
+        console.log('[%s] errored\n', counter);
+        counter++;
+        return next(err);
+    });
+}, err => {
+    if (err) {
+        console.error(err);
+        return process.exit(1)
+    }
+    
+    const eventsSectionIndex = _.findIndex(parsedAssFile, ['section', 'Events'])
+    toTranslate.unshift(eventsOfAssFile.body[0])
+    _.set(parsedAssFile, [eventsSectionIndex, 'body'], toTranslate)
+
+    // console.log(parsedAssFile[eventsSectionIndex].body)
+    const translatedAssFileContent = stringify(parsedAssFile)
+    fs.writeFileSync(targetFile, translatedAssFileContent, 'utf-8')
+    console.log('done');
+
+    process.exit(0)
+})
